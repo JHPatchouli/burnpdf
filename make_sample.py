@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# Copyright (c) 2026 JHPatchouli
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Write a three-page sample PDF for local tests."""
 
 from pathlib import Path

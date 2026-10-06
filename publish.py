@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# Copyright (c) 2026 JHPatchouli
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Publish one PDF from the command line.
 
     python publish.py samples/sample-quote.pdf --limit 1 --duration 10 --days 3

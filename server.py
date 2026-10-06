@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# Copyright (c) 2026 JHPatchouli
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """View-limited PDF links.
 
 The original PDF stays on the server. Viewers receive watermarked page images.
