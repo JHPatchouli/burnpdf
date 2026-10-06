@@ -10,6 +10,7 @@ View-limited links for PDF files. The original stays on the server; viewers rece
 
 <br>
 
+[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776AB.svg)](server.py)
 [![PyMuPDF](https://img.shields.io/badge/pymupdf-1.28-1f6feb.svg)](https://pymupdf.readthedocs.io/)
 
@@ -101,6 +102,10 @@ python publish.py samples/sample-quote.pdf \
 View-limited links for PDF files.
 
 View counts · Session duration · Expiry · Page watermarks · Access logs
+
+<br>
+
+[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
 
 </div>
 
