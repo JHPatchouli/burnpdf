@@ -1,0 +1,13 @@
+services:
+  burnpdf:
+    build: .
+    image: burnpdf:1.0
+    container_name: burnpdf
+    restart: unless-stopped
+    ports:
+      - "8770:8770"   # 对外服务端口：外层 Nginx/Caddy 反代到这个端口
+      - "2222:22"     # SSH 运维端口：映射到宿主机 2222，避开宿主机自己的 22
+    volumes:
+      - ./data:/app/data    # 持久化：SQLite + 已渲染图片 + 管理密钥（务必保留）
+    environment:
+      - TZ=Asia/Shanghai

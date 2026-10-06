@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>阅后即焚 PDF · 管理台</title>
+<style>
+  :root{--bg:#f5f6f8;--card:#fff;--fg:#1f2430;--sub:#6b7686;--line:#e3e6ec;--acc:#2f6bff;
+        --ok:#12a150;--warn:#d97706;--bad:#dc2626}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+    font:15px/1.6 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif}
+  .wrap{max-width:1060px;margin:0 auto;padding:26px 20px 60px}
+  h1{font-size:21px;margin:0 0 4px}
+  .sub{color:var(--sub);font-size:13px;margin-bottom:22px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px;margin-bottom:18px}
+  .card h2{font-size:15px;margin:0 0 14px;font-weight:600}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px}
+  label{display:block;font-size:12px;color:var(--sub);margin-bottom:5px}
+  input,select,textarea{width:100%;padding:9px 11px;border:1px solid var(--line);border-radius:9px;
+    font:inherit;background:#fff;color:inherit}
+  textarea{resize:vertical;min-height:64px}
+  button{padding:10px 18px;border:0;border-radius:9px;background:var(--acc);color:#fff;
+    font:inherit;font-weight:600;cursor:pointer}
+  button.ghost{background:#eef1f6;color:#39424f}
+  button.mini{padding:5px 10px;font-size:12.5px;font-weight:500;border-radius:7px}
+  button:disabled{opacity:.5;cursor:default}
+  table{width:100%;border-collapse:collapse;font-size:13.5px}
+  th,td{text-align:left;padding:9px 8px;border-bottom:1px solid var(--line);vertical-align:middle}
+  th{color:var(--sub);font-weight:500;font-size:12px}
+  code{background:#f0f2f6;padding:2px 6px;border-radius:5px;font-size:12.5px;word-break:break-all}
+  .pill{display:inline-block;padding:2px 8px;border-radius:20px;font-size:12px}
+  .p-ok{background:#e7f7ee;color:var(--ok)}
+  .p-off{background:#fdecec;color:var(--bad)}
+  .p-warn{background:#fef3e2;color:var(--warn)}
+  #out{margin-top:14px;font-size:13.5px;display:none}
+  #out .row{display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap}
+  .hint{color:var(--sub);font-size:12.5px;margin-top:8px}
+  dialog{border:0;border-radius:14px;padding:20px;max-width:760px;width:92%}
+  dialog::backdrop{background:rgba(0,0,0,.45)}
+  .loglist{font-size:12.5px;max-height:420px;overflow:auto}
+  .loglist div{padding:5px 0;border-bottom:1px dashed var(--line);color:#495364}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>阅后即焚 PDF · 管理台</h1>
+  <div class="sub">PDF 只在你自己的服务器上 → 转成图片下发 → 看一次即失效</div>
+
+  <div class="card">
+    <h2>① 管理密钥</h2>
+    <div class="grid">
+      <div><label>管理密钥</label>
+        <input id="key" type="password" placeholder="请输入管理密钥"
+               autocomplete="off" spellcheck="false"></div>
+      <div style="display:flex;align-items:flex-end;gap:8px">
+        <button id="saveKey">保存并连接</button>
+        <button class="ghost" id="clearKey">清除</button>
+      </div>
+    </div>
+    <div class="hint" id="keystate"></div>
+  </div>
+
+  <div class="card">
+    <h2>② 发布一份 PDF</h2>
+    <div class="grid">
+      <div style="grid-column:span 2"><label>选择 PDF 文件</label><input id="file" type="file" accept="application/pdf"></div>
+      <div><label>文件名称（客户可见）</label><input id="name" placeholder="如：XH-202 报价单 V3"></div>
+      <div><label>收件人（谁看的——只进你的台账，不会出现在图片上）</label>
+        <input id="recipient" placeholder="如：XX电子 李经理"></div>
+      <div><label>可查看次数</label><input id="limit" type="number" value="1" min="1" max="999"></div>
+      <div><label>单次可看（分钟）</label><input id="duration" type="number" value="10" min="1" max="1440"></div>
+      <div><label>链接有效期（天，0=永久）</label><input id="days" type="number" value="3" min="0" max="3650"></div>
+      <div><label>每页切条数（≥2 可防「长按保存整页」）</label>
+        <select id="strips"><option value="1">1（不切）</option><option value="4">4</option><option value="6">6</option></select></div>
+      <div><label>传输体积（小带宽建议选省流量）</label>
+        <select id="size">
+          <option value="2.0|88">标准（约 140KB/页）</option>
+          <option value="1.5|78" selected>省流量（约 75KB/页）</option>
+          <option value="1.2|72">极小（约 50KB/页）</option>
+        </select></div>
+      <div style="grid-column:span 2"><label>水印文字（会直接烧进图片，建议：客户公司名 + 日期）</label>
+        <input id="watermark" placeholder="如：仅限 XX 电子 2026-09-30"></div>
+    </div>
+    <div style="margin-top:16px"><button id="go">生成链接</button>
+      <span class="hint" id="pubstate"></span></div>
+    <div id="out"></div>
+  </div>
+
+  <div class="card">
+    <h2>③ 已发布的链接 <button class="ghost mini" id="refresh" style="margin-left:8px">刷新</button></h2>
+    <div id="list"><div class="hint">（未连接）</div></div>
+  </div>
+</div>
+
+<dialog id="logdlg">
+  <h2 style="margin-top:0">访问日志</h2>
+  <div class="loglist" id="logbody"></div>
+  <div style="margin-top:14px;text-align:right"><button class="ghost" onclick="document.getElementById('logdlg').close()">关闭</button></div>
+</dialog>
+
+<script>
+var KEY = localStorage.getItem("burn_admin_key") || "";
+var $ = function(s){ return document.querySelector(s); };
+var KEYEL = $("#key");
+
+function hdrs(){
+  return {"Content-Type":"application/json", "X-Admin-Key": KEY};
+}
+function api(path, body, method){
+  return fetch(path, {
+    method: method || (body ? "POST" : "GET"),
+    headers: hdrs(),
+    body: body ? JSON.stringify(body) : undefined,
+    cache: "no-store"
+  }).then(function(r){ return r.json(); });
+}
+function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g, function(c){
+  return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]; }); }
+function ts(t){ if(!t) return "永久";
+  var d = new Date(t*1000);
+  return d.getFullYear()+"-"+("0"+(d.getMonth()+1)).slice(-2)+"-"+("0"+d.getDate()).slice(-2)+
+         " "+("0"+d.getHours()).slice(-2)+":"+("0"+d.getMinutes()).slice(-2); }
+function fullUrl(tok){ return location.origin + "/v/" + tok; }
+
+function setKeyState(txt, color){
+  var el = $("#keystate");
+  el.textContent = txt;
+  el.style.color = color || "";
+}
+
+function loadList(){
+  if(!KEY) return;
+  api("/api/list").then(function(r){
+    if(!r.ok){ $("#list").innerHTML = '<div class="hint" style="color:#dc2626">'+esc(r.msg||"读取失败")+'</div>'; return; }
+    if(!r.items.length){ $("#list").innerHTML = '<div class="hint">还没有发布过文件</div>'; return; }
+    var rows = r.items.map(function(d){
+      var cls = d.revoked ? "p-off" : (d.status==="ready" ? "p-ok" : "p-warn");
+      var st  = d.revoked ? "已作废" : (d.status==="ready" ? "有效中" :
+                (d.status==="used_up" ? "已用完" : (d.status==="expired" ? "已过期" : d.status)));
+      return "<tr>" +
+        "<td>" + esc(d.name) + "<br><code>" + fullUrl(d.token) + "</code>" +
+          (d.recipient ? "<br><span class='hint'>→ " + esc(d.recipient) + "</span>" : "") +
+        "</td>" +
+        "<td>" + d.pages + " 页</td>" +
+        "<td>" + d.used_views + " / " + d.limit_views + "</td>" +
+        "<td>" + Math.round(d.duration_sec/60) + " 分</td>" +
+        "<td>" + ts(d.expire_ts) + "</td>" +
+        "<td><span class='pill " + cls + "'>" + st + "</span></td>" +
+        "<td style='white-space:nowrap'>" +
+          "<button class='mini ghost' data-copy='" + fullUrl(d.token) + "'>复制</button> " +
+          "<button class='mini ghost' data-log='" + d.token + "'>日志</button> " +
+          "<button class='mini ghost' data-rev='" + d.token + "' data-on='" + d.revoked + "'>" +
+            (d.revoked ? "恢复" : "作废") + "</button>" +
+        "</td></tr>";
+    }).join("");
+    $("#list").innerHTML = "<table><thead><tr><th>文件 / 链接</th><th>页数</th><th>已看/上限</th>" +
+      "<th>单次</th><th>到期</th><th>状态</th><th>操作</th></tr></thead><tbody>" + rows + "</tbody></table>";
+  });
+}
+
+// IP → 归属地：就地查询，不跳出页面。
+// 后端会永久缓存结果 —— 同一个 IP 只会真正打一次外部接口。
+function geoLook(btn, ip){
+  btn.disabled = true;
+  btn.textContent = "查询中…";
+  api("/api/iploc?ip=" + encodeURIComponent(ip)).then(function(r){
+    if(r && r.ok){
+      btn.outerHTML = "<span style='color:#0a7;font-weight:600'>" +
+        esc(r.loc) + (r.cached ? " <span class='hint'>（缓存）</span>" : "") +
+        "</span>";
+    }else{
+      btn.disabled = false;
+      btn.textContent = "查位置";
+      btn.title = (r && r.msg) || "查询失败";
+    }
+  }).catch(function(){
+    btn.disabled = false;
+    btn.textContent = "查位置";
+    btn.title = "网络错误";
+  });
+}
+
+document.addEventListener("click", function(e){
+  var b = e.target.closest("button");
+  if(!b) return;
+  if(b.dataset.geo){ geoLook(b, b.dataset.geo); return; }
+  if(b.dataset.copy){
+    navigator.clipboard.writeText(b.dataset.copy)
+      .then(function(){ b.textContent = "已复制";
+        setTimeout(function(){ b.textContent = "复制"; }, 1200); })
+      .catch(function(){ prompt("手动复制：", b.dataset.copy); });
+  }
+  if(b.dataset.rev){
+    api("/api/revoke", {token: b.dataset.rev, restore: b.dataset.on === "1"})
+      .then(loadList);
+  }
+  if(b.dataset.log){
+    api("/api/logs?token=" + b.dataset.log).then(function(r){
+      var html = (r.items || []).map(function(x){
+        var loc = /^[\d.]+$/.test(x.ip || "")
+          ? " <button class='mini ghost' data-geo='" + x.ip + "'>查位置</button>"
+          : "";
+        return "<div>" + ts(x.ts) + " &nbsp;<b>" + esc(x.action) + "</b> " +
+               esc(x.detail) + "<br><span class='hint'>" + esc(x.ip) + loc +
+               (x.dev ? " &nbsp;|&nbsp; " + esc(x.dev) : "") + "</span></div>";
+      }).join("") || "<div>暂无记录</div>";
+      $("#logbody").innerHTML = html;
+      $("#logdlg").showModal();
+    });
+  }
+});
+
+$("#saveKey").onclick = function(){
+  KEY = KEYEL.value.trim();
+  if(!KEY){ setKeyState("请输入管理密钥", "#dc2626"); return; }
+  localStorage.setItem("burn_admin_key", KEY);
+  api("/api/list").then(function(r){
+    if(r.ok){ setKeyState("已连接 ✓", "#12a150"); loadList(); }
+    else { setKeyState("密钥不正确：" + (r.msg||""), "#dc2626"); }
+  }).catch(function(){ setKeyState("无法连接服务器，确认服务已启动", "#dc2626"); });
+};
+$("#clearKey").onclick = function(){
+  localStorage.removeItem("burn_admin_key"); KEY = ""; KEYEL.value = "";
+  setKeyState("已清除"); $("#list").innerHTML = '<div class="hint">（未连接）</div>';
+};
+$("#refresh").onclick = loadList;
+
+$("#go").onclick = function(){
+  var f = $("#file").files[0];
+  var st = $("#pubstate");
+  if(!f){ st.textContent = "请先选择 PDF 文件"; st.style.color = "#dc2626"; return; }
+  var btn = this;
+  btn.disabled = true;
+  st.style.color = "";
+  st.textContent = "正在读取并渲染…（页数多时需要几秒）";
+  var fr = new FileReader();
+  fr.onload = function(){
+    var sz = ($("#size").value || "2.0|88").split("|");
+    var body = {
+      name: $("#name").value || f.name.replace(/\.pdf$/i, ""),
+      recipient: $("#recipient").value,
+      pdf_b64: fr.result,
+      limit: +$("#limit").value || 1,
+      duration: (+$("#duration").value || 10) * 60,
+      expire_days: +$("#days").value,
+      strips: +$("#strips").value || 1,
+      scale: parseFloat(sz[0]),
+      quality: parseInt(sz[1], 10),
+      watermark: $("#watermark").value
+    };
+    api("/api/publish", body).then(function(r){
+      btn.disabled = false;
+      if(!r.ok){ st.textContent = r.msg || "发布失败"; st.style.color = "#dc2626"; return; }
+      st.textContent = "发布成功 ✓";
+      st.style.color = "#12a150";
+      var url = fullUrl(r.token);
+      var out = $("#out");
+      out.style.display = "block";
+      out.innerHTML = "<div class='row'><b>链接（" + r.pages + " 页）：</b>" +
+        "<code>" + esc(url) + "</code>" +
+        "<button class='mini' id='cp'>复制链接</button>" +
+        "<button class='mini ghost' onclick=\"window.open('" + url + "','_blank')\">自己先试一次</button></div>" +
+        "<div class='hint'>发链接给客户就行 —— 不要发 PDF 文件本身。自己试那一次同样会消耗次数（可用「恢复」或重新发布）。</div>";
+      $("#cp").onclick = function(){
+        navigator.clipboard.writeText(url).then(function(){ $("#cp").textContent = "已复制"; });
+      };
+      loadList();
+    }).catch(function(){
+      btn.disabled = false;
+      st.textContent = "请求失败，检查服务是否在运行"; st.style.color = "#dc2626";
+    });
+  };
+  fr.readAsDataURL(f);
+};
+
+KEYEL.value = KEY;
+if(KEY) $("#saveKey").click();
+</script>
+</body>
+</html>

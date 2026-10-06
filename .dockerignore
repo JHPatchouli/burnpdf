@@ -1,0 +1,8 @@
+# 不要把本地数据、私钥、虚拟环境打进镜像
+data/
+ssh/deploy_key
+__pycache__/
+*.pyc
+*.pyo
+.git/
+.gitignore

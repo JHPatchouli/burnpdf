@@ -1,0 +1,17 @@
+# 运行时数据：数据库、已渲染页面、管理密钥
+data/
+
+# 部署私钥与备份
+ssh/deploy_key
+ssh/deploy_key.pub
+*.tgz
+*.tar.gz
+
+# 指向真实服务器的运维脚本，不进入公开仓库
+_tools/
+
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/

@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="referrer" content="no-referrer">
+<meta name="robots" content="noindex,nofollow,noarchive">
+<title>文件查看</title>
+<style>
+  :root{ --bg:#16181d; --fg:#e9ecf1; --sub:#9aa4b2; --acc:#3d7fff; }
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--fg);
+    font:16px/1.65 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;
+    -webkit-tap-highlight-color:transparent;}
+  /* 禁选择/禁长按菜单/禁拖动 —— 只是提高门槛，不是绝对防护 */
+  *{ -webkit-touch-callout:none; -webkit-user-select:none; -ms-user-select:none; user-select:none; }
+  img{ pointer-events:none; }
+  #app{max-width:720px;margin:0 auto;padding:48px 22px;}
+  .box{text-align:center}
+  .ico{font-size:44px;line-height:1;margin-bottom:10px;opacity:.9}
+  h2{margin:.2em 0 .5em;font-size:20px;font-weight:600}
+  p{margin:.5em 0;color:var(--sub);font-size:14px}
+  .tip{font-size:13px;line-height:1.8;color:#7f8a99;
+       background:#1e2128;border:1px solid #262a33;border-radius:12px;padding:12px 14px;margin-top:18px}
+  button{margin-top:26px;width:100%;max-width:320px;padding:15px 20px;font-size:17px;
+    font-weight:600;color:#fff;background:var(--acc);border:0;border-radius:12px;
+    cursor:pointer;font-family:inherit}
+  button:active{opacity:.85}
+  #bar{position:fixed;left:0;right:0;top:0;z-index:9;height:40px;display:flex;
+    align-items:center;justify-content:space-between;padding:0 14px;
+    background:rgba(22,24,29,.94);backdrop-filter:blur(8px);
+    border-bottom:1px solid #262a33;font-size:13px;color:var(--sub)}
+  #bar b{color:var(--fg);font-variant-numeric:tabular-nums}
+  #doc{padding:52px 0 60px}
+  .pg{line-height:0;margin:0 0 10px;background:#fff;border-radius:2px;overflow:hidden}
+  .pg img{display:block;width:100%;height:auto}
+  .load{text-align:center;color:var(--sub);font-size:13px;padding:14px}
+  @media print{ body > *{display:none !important} body::after{
+    content:"本文件不支持打印";color:#000;font-size:22px;display:block;text-align:center;padding-top:40px} }
+</style>
+</head>
+<body>
+<div id="app"><div class="box"><p>加载中…</p></div></div>
+<script>
+(function(){
+  var TOKEN = "__TOKEN__";
+  var SID = "";
+  try { SID = sessionStorage.getItem("burn_" + TOKEN) || ""; } catch(e){}
+  var app = document.getElementById("app");
+  var timer = null, left = 0;
+
+  function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g, function(c){
+    return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]; }); }
+
+  function api(path, body){
+    var opt = { cache:"no-store" };
+    if (body) { opt.method = "POST";
+      opt.headers = {"Content-Type":"application/json"};
+      opt.body = JSON.stringify(body); }
+    return fetch(path, opt).then(function(r){ return r.json(); });
+  }
+
+  function dead(msg){
+    if (timer) clearInterval(timer);
+    app.innerHTML = '<div class="box"><div class="ico">&#128274;</div>' +
+      '<h2>链接已失效</h2><p>' + esc(msg) + '</p>' +
+      '<div class="tip">需要再次查看，请联系发件人重新获取链接。</div></div>';
+  }
+
+  function mmss(s){
+    s = Math.max(0, Math.floor(s));
+    return Math.floor(s/60) + ":" + ("0" + (s%60)).slice(-2);
+  }
+
+  function gate(info){
+    app.innerHTML = '<div class="box">' +
+      '<h2>' + esc(info.name) + '</h2>' +
+      '<p>共 ' + info.pages + ' 页 &nbsp;·&nbsp; 仅可查看 ' + info.limit +
+        ' 次（剩余 ' + info.remaining + ' 次）</p>' +
+      '<div class="tip">' +
+        '点击「开始阅读」将消耗 1 次查看机会。<br>' +
+        '单次最长可看 ' + Math.round(info.duration/60) + ' 分钟，' +
+        '不支持下载、打印与复制。<br>' +
+        '请确认网络正常后再开始，避免浪费次数。' +
+      '</div>' +
+      '<button id="go">开始阅读</button></div>';
+    document.getElementById("go").onclick = function(){
+      this.disabled = true; this.textContent = "正在打开…";
+      api("/api/prepare", {token:TOKEN, sid:SID}).then(function(r){
+        if (!r.ok) { dead(r.msg || "无法打开"); return; }
+        try { sessionStorage.setItem("burn_" + TOKEN, r.sid); } catch(e){}
+        SID = r.sid;
+        render(r);
+      }).catch(function(){ dead("网络异常，请稍后再试"); });
+    };
+  }
+
+  function render(r){
+    var strips = r.strips || 1, html = [];
+    for (var i = 0; i < r.pages; i++) {
+      var chunk = [];
+      for (var k = 0; k < strips; k++) {
+        chunk.push('<img draggable="false" alt="" data-p="' + i + '" data-k="' + k + '"' +
+                  (i === 0 ? '' : ' loading="lazy"') + '>');
+      }
+      html.push('<div class="pg">' + chunk.join("") + '</div>');
+    }
+    document.title = "在线查看";
+    document.body.innerHTML =
+      '<div id="bar"><span>剩余次数 <b>' + r.limit_left + '</b> / 时限 <b id="clock"></b></span>' +
+      '<span>禁止下载 · 打印</span></div>' +
+      '<div id="doc">' + html.join("") + '</div>';
+
+    left = r.left || r.duration || 600;
+    var clock = document.getElementById("clock");
+    clock.textContent = mmss(left);
+    if (timer) clearInterval(timer);
+    timer = setInterval(function(){
+      left -= 1; clock.textContent = mmss(left);
+      if (left <= 0) end("本次阅读时间已结束");
+    }, 1000);
+
+    // 直接把 src 交给浏览器，配合 loading="lazy" 做原生懒加载。
+    // 不用 IntersectionObserver：在部分内嵌 WebView / 无真实视口的环境里 IO 不触发，会整页白屏。
+    var seen = 0, firstErr = false;
+    var all = document.querySelectorAll("#doc img");
+    for (var j = 0; j < all.length; j++) {
+      (function(img){
+        img.onerror = function(){
+          if (firstErr) return;
+          firstErr = true;
+          if (seen === 0) end("访问已被拒绝，链接可能已失效");
+        };
+        img.onload = function(){ seen++; };
+        img.src = "/v/" + TOKEN + "/p/" + img.dataset.p + "?s=" + SID +
+                  "&k=" + img.dataset.k;
+      })(all[j]);
+    }
+  }
+
+  function end(msg){
+    if (timer) clearInterval(timer);
+    timer = null;
+    try {
+      var d = JSON.stringify({sid: SID});
+      if (navigator.sendBeacon) navigator.sendBeacon("/api/close", new Blob([d], {type:"application/json"}));
+      else fetch("/api/close", {method:"POST", headers:{"Content-Type":"application/json"}, body:d});
+    } catch(e){}
+    document.body.innerHTML = '<div style="max-width:720px;margin:0 auto;padding:60px 22px">' +
+      '<div class="box"><div class="ico">&#9203;</div><h2>' + esc(msg) + '</h2>' +
+      '<p>如需继续查看，请联系发件人重新获取链接。</p></div></div>';
+  }
+
+  // 顺手拦一下打印 / 右键
+  window.addEventListener("beforeprint", function(){ end("本文件不支持打印"); });
+  document.addEventListener("contextmenu", function(e){ e.preventDefault(); });
+
+  api("/api/info?token=" + encodeURIComponent(TOKEN)).then(function(info){
+    if (!info.ok) { dead(info.msg || "链接无效"); return; }
+    gate(info);
+  }).catch(function(){ dead("无法连接服务器"); });
+})();
+</script>
+</body>
+</html>
