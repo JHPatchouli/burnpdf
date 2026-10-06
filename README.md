@@ -2,11 +2,11 @@
 
 # 阅后即焚 PDF
 
-View-limited links for PDF files. The original stays on the server; viewers receive watermarked page images.
-
 把 PDF 发成可计次的阅读链接。原文件留在服务器上，阅读页只接收带水印的页面图片。
 
 计次 · 单次时长 · 到期时间 · 页面水印 · 访问日志
+
+View counts · Session duration · Expiry · Page watermarks · Access logs
 
 <br>
 
@@ -92,96 +92,3 @@ python publish.py samples/sample-quote.pdf \
 - 日志保存在 `data/burn.db`，需要自行清理。
 
 容器运行见 [DOCKER.md](DOCKER.md)。
-
----
-
-<div align="center">
-
-# Burn-after-reading PDF
-
-View-limited links for PDF files.
-
-View counts · Session duration · Expiry · Page watermarks · Access logs
-
-<br>
-
-[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
-
-</div>
-
----
-
-Opening a link does not consume a view. A view is counted when the reader starts, and remains available for the configured session duration. The link stops opening when its view count is used, it expires, or it is revoked.
-
-Screenshots and photographs cannot be prevented. The watermark is part of each image and includes the link identifier and the reading time.
-
-## Features
-
-| Module | Scope |
-|---|---|
-| Limits | Total views, session duration, and expiry |
-| Sessions | Refresh does not count again; an unloaded view is refunded |
-| Delivery | The original PDF is not sent; pages are served as JPEG images |
-| Watermark | Written at publish time, with a label, the link, and the time |
-| Admin | Upload, revoke, restore, and access logs |
-
-## Files
-
-| File | Purpose |
-|---|---|
-| `server.py` | Publishing, view counts, images, revocation, and logs |
-| `viewer.html` | Reading page |
-| `admin.html` | Admin page |
-| `publish.py` | Command-line publishing |
-| `make_sample.py` | Sample PDF |
-| `selftest.py` | Checks against a running server |
-| `data/` | Created at runtime: database, page images, and the admin key |
-
-## View counting
-
-1. Opening the link shows the notice and does not count a view.
-2. The view is counted when the reading session is created. That session can keep loading images until its time ends.
-3. A refresh reuses the session stored in `sessionStorage` and does not count again.
-4. If no page loads within 60 seconds, the next open refunds that view.
-5. Image URLs carry the session identifier. Invalid, out-of-range, and expired requests are rejected.
-
-## Start
-
-```bash
-pip install pymupdf
-python make_sample.py
-python server.py
-```
-
-The first start creates an admin key and prints the admin address:
-
-```text
-http://127.0.0.1:8770/admin
-```
-
-The key is stored in `data/admin.key` and is not printed again. Open `/admin`, enter the key, upload a PDF, and set the limits.
-
-```bash
-python publish.py samples/sample-quote.pdf \
-    --limit 1 --duration 10 --days 3 --strips 4 \
-    --watermark "SAMPLE 2026-09-30"
-```
-
-| Option | Meaning |
-|---|---|
-| `--limit` | Total number of views |
-| `--duration` | Minutes allowed in one session |
-| `--days` | Link lifetime in days; `0` means no date expiry |
-| `--strips` | Number of image strips per page |
-| `--watermark` | Extra text included in the watermark |
-
-Start `server.py`, then run `python selftest.py`. The checks cover view counting, image access inside a session, invalid sessions, refresh, refunds, revocation, expiry, and admin authentication.
-
-## Limits
-
-- The watermark is created at publish time and is not renumbered for each open.
-- The admin page does not generate a QR code.
-- Input is PDF. Output images are JPEG.
-- Logs stay in `data/burn.db` and are not rotated by themselves.
-
-Container setup is documented in [DOCKER.md](DOCKER.md).
