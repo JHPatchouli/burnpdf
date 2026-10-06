@@ -1,17 +1,12 @@
 #!/bin/bash
-# ============================================================
-# burnpdf 一键部署（幂等 / 只增不改）
+# Build and replace the burnpdf container.
 #
 #   bash deploy.sh
-#   PORT=18770 SSH_PORT=12222 bash deploy.sh     # 手动指定端口
+#   PORT=18770 SSH_PORT=12222 bash deploy.sh
 #
-# 安全约定（写死在脚本里，不会越界）：
-#   · 只 【新增】镜像 burnpdf:1.0 + 容器 burnpdf + 目录 /root/pdf-burn
-#   · 端口被占用 → 自动 +1 让位，【绝不 kill 任何进程】
-#   · 只删【自己的】同名容器；不碰任何其他容器
-#   · 不改 nginx/caddy 配置、不动 firewalld 全局策略、不重启其他服务
-#   · 不跑 docker prune / system prune，不升级系统包
-# ============================================================
+# The script adds the burnpdf image, the burnpdf container, and /root/pdf-burn.
+# A busy port moves to the next free port. It removes only its own container,
+# and it does not change the reverse proxy, firewall policy, or other containers.
 set -uo pipefail
 
 APP=burnpdf
@@ -30,15 +25,13 @@ say "  Docker  $(docker version --format '{{.Server.Version}}' 2>/dev/null)"
 say "  系统    $(cat /etc/redhat-release 2>/dev/null || uname -sr)"
 say "  SELinux $(getenforce 2>/dev/null || echo N/A)   内存 $(free -m | awk 'NR==2{print $2}')MB   磁盘 $(df -h / | awk 'NR==2{print $4}') 可用"
 
-# ---------- 2 同名容器（必须先删！）----------
-# 旧容器是最后一个占着默认端口的。若先探测端口再删容器，
-# 探测会把【自己的旧容器】当成"端口被占" → 自动漂移到别的端口
-# → 外层反代 502，运维 SSH 失联。所以顺序必须是：先删、再选。
+# Remove the previous burnpdf container before choosing ports.
+# Otherwise its own ports look busy and the replacement moves elsewhere.
 say "2/6 检查同名容器（先删，再选端口）"
 if docker ps -a --format '{{.Names}}' | grep -qx "$APP"; then
-  say "  发现已有的 $APP（我们自己的），先删掉它"
+  say "  已有同名容器，先删除"
   docker rm -f "$APP" >/dev/null || die "删除旧容器失败"
-  sleep 1   # 等 docker-proxy 真正释放端口
+  sleep 1   # wait for docker-proxy to release the ports
 fi
 
 # ---------- 3 端口：被占就让位 ----------
@@ -58,7 +51,7 @@ while [ "$SSH_PORT" = "$PORT" ]; do SSH_PORT=$((SSH_PORT + 1)); done
 say "  选用：服务 $PORT ，SSH $SSH_PORT"
 if [ "$PORT" != "8770" ] || [ "$SSH_PORT" != "2222" ]; then
   say "  [注意] 期望 8770/2222，实际 $PORT/$SSH_PORT"
-  say "         外层反代与运维脚本是按这两个端口写的，改了就必须同步改它们"
+  say "         反向代理如果写死了默认端口，需要同步修改"
 fi
 
 # ---------- 4 数据目录 ----------
@@ -75,16 +68,13 @@ docker image ls "$IMG" --format '  镜像 {{.Repository}}:{{.Tag}}  {{.Size}}' >
 # ---------- 6 启动 ----------
 say "6/6 启动容器"
 
-# /app 直接挂宿主机源码目录，好处：
-#   · 在容器里改代码 = 改宿主机文件（持久），改完重启容器即生效，不用重建镜像
-#   · /app/data 天然就是 $DATA，数据照旧落在宿主机，不用再单独挂一次
-#   · 镜像里的 COPY 仍然保留（镜像自包含），只是运行时被这个挂载盖住
-# 风险：如果 $SRC 缺文件，挂上去就是个坏容器 → 先校验，缺就中止
+# Mount the source directory at /app. Edits there survive a restart, and
+# /app/data is the same directory as $DATA. Stop if a required file is missing.
 for f in server.py viewer.html admin.html publish.py make_sample.py selftest.py entrypoint.sh; do
-  [ -f "$SRC/$f" ] || die "源码目录缺 $f —— 挂载 /app 会做出一个坏容器，已中止"
+  [ -f "$SRC/$f" ] || die "缺少 $f，已中止"
 done
 
-# 挂载会【盖住】镜像里的文件，于是构建期做过的修正全部失效，必须在这里补做：
+# A bind mount hides the image copy, so repeat the entrypoint fixes here.
 # The image build fixes entrypoint.sh, but a bind mount hides those fixes.
 # Normalize line endings and the executable bit on the host copy before starting.
 sed -i 's/\r$//' "$SRC/entrypoint.sh" 2>/dev/null || true

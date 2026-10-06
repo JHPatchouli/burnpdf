@@ -1,5 +1,5 @@
 #!/bin/bash
-# 同时拉起 sshd（运维）和应用；任一退出则容器退出，交给 restart 策略拉起。
+# Run sshd and the application. If either exits, stop the container.
 set -e
 
 mkdir -p /run/sshd

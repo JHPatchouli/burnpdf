@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""生成一份用于测试的示例 PDF（中文报价单，3 页）。"""
+"""Write a three-page sample PDF for local tests."""
 
 from pathlib import Path
 
@@ -8,7 +8,7 @@ import pymupdf
 
 HERE = Path(__file__).resolve().parent
 OUT = HERE / "samples" / "sample-quote.pdf"
-FONT = "china-s"          # PyMuPDF 内置简体中文字体
+FONT = "china-s"          # built-in simplified Chinese font
 
 
 def frame(page, title, subtitle=""):

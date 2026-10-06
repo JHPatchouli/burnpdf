@@ -1,17 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-阅后即焚 PDF 阅读服务（自建最小实现）
-======================================================
-思路：不发 PDF 文件，只发一条由服务端控制的链接。
+"""View-limited PDF links.
 
-  · PDF 在服务端就转成图片（原文件永远不下发）
-  · 点「开始阅读」才扣次数；扣完次数链接即失效
-  · 支持：限总次数 / 单次可看时长 / 到期时间 / 水印烧进图 / 一键作废 / 访问日志
-  · 60 秒宽限：扣了次数但一页都没加载出来（网络抖动、误触）→ 自动退还次数
+The original PDF stays on the server. Viewers receive watermarked page images.
+A view is counted when reading starts. Limits cover total views, one session's
+duration, and an expiry time. A counted view with no loaded page is refunded
+after IDLE_REFUND_SEC.
 
-依赖：PyMuPDF（pymupdf），其余全是标准库。
-运行：python server.py
+Requires pymupdf. Run: python server.py
 """
 
 from __future__ import annotations
@@ -36,7 +32,7 @@ import ipaddress
 
 try:
     import pymupdf
-except ImportError:  # 旧包名
+except ImportError:  # older package name
     import fitz as pymupdf  # type: ignore
 
 # ua-parser is optional. Install it under ./vendor if you want device-level
@@ -60,17 +56,17 @@ ADMIN_KEY_FILE = DATA / "admin.key"
 HOST = "0.0.0.0"
 PORT = 8770
 
-DEFAULT_LIMIT = 1          # 默认：只能看 1 次
-DEFAULT_DURATION = 600     # 默认单次可看 600 秒
-DEFAULT_EXPIRE_DAYS = 3    # 默认 3 天后链接失效
-DEFAULT_SCALE = 2.0        # 渲染倍率（2.0 ≈ 144dpi，够手机看）
-DEFAULT_QUALITY = 88       # JPEG 质量
-DEFAULT_STRIPS = 1         # 每页切几条（>1 可防止「长按保存一整页」）
-IDLE_REFUND_SEC = 60       # 扣次后多少秒内没加载到页面就退次数
-SCRAPE_SEC = 2.0           # 多少秒内取完整份文档的图块 → 判定为脚本抓图
-SCRAPE_MIN_BLOCKS = 8      # 块数太少没有判定意义（防止误报小文档）
-BACKUP_KEEP_DAYS = 7       # burn.db 备份保留份数（每天一份）
-CLEAN_AFTER_DAYS = 30      # 过期超过这么多天 → 删文档文件（保留 db 记录）
+DEFAULT_LIMIT = 1          # views allowed per link
+DEFAULT_DURATION = 600     # seconds allowed in one reading session
+DEFAULT_EXPIRE_DAYS = 3    # link lifetime; 0 means no date expiry
+DEFAULT_SCALE = 2.0        # render scale, about 144 dpi
+DEFAULT_QUALITY = 88       # JPEG quality
+DEFAULT_STRIPS = 1         # horizontal strips per page
+IDLE_REFUND_SEC = 60       # refund a view when no page loads within this time
+SCRAPE_SEC = 2.0           # full fetch faster than this is logged
+SCRAPE_MIN_BLOCKS = 8      # ignore scrape checks for smaller documents
+BACKUP_KEEP_DAYS = 7       # daily database backups to keep
+CLEAN_AFTER_DAYS = 30      # delete files this long after expiry; keep the row
 MAX_UPLOAD = 80 * 1024 * 1024
 
 # IP geolocation runs only when an admin asks for one address, then caches it.
@@ -79,7 +75,7 @@ GEO_URL = ("http://ip-api.com/json/%s"
            "?lang=zh-CN&fields=status,country,regionName,city,isp,query")
 GEO_TIMEOUT = 6.0
 
-FONT_CJK = "china-s"       # PyMuPDF 内置简体中文字体
+FONT_CJK = "china-s"       # built-in simplified Chinese font
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS docs(
@@ -145,9 +141,9 @@ def admin_key() -> str:
 
 # Admin-key failures are rate limited in process memory. A restart clears the count.
 _FAILS: dict = {}
-FAIL_WINDOW = 300.0     # 失败计数窗口：5 分钟
-FAIL_MAX = 8            # 窗口内允许失败次数
-BLOCK_SEC = 900.0       # 超限后封禁 15 分钟
+FAIL_WINDOW = 300.0     # failure counting window, seconds
+FAIL_MAX = 8            # failures allowed inside that window
+BLOCK_SEC = 900.0       # block duration after the limit is reached
 
 
 def _fails_gc():
@@ -161,21 +157,21 @@ def _fails_gc():
 
 
 def fail_check(ip):
-    """返回 (还需等待秒数, 剩余额度)。wait>0 表示正处于封禁中。"""
+    """Return seconds still blocked and remaining attempts."""
     s = _FAILS.get(ip)
     t = now()
     if not s:
         return 0.0, FAIL_MAX
     if s["until"] > t:
         return s["until"] - t, 0
-    if t - s["t0"] > FAIL_WINDOW:   # 窗口已过，重新开始
+    if t - s["t0"] > FAIL_WINDOW:   # window expired; start again
         _FAILS.pop(ip, None)
         return 0.0, FAIL_MAX
     return 0.0, max(0, FAIL_MAX - s["n"])
 
 
 def fail_hit(ip):
-    """记一次失败。返回 (本次是第几次, 是否刚被封)。"""
+    """Record one failure. Return the count and whether a block just started."""
     t = now()
     s = _FAILS.get(ip)
     if not s or t - s["t0"] > FAIL_WINDOW:
@@ -293,14 +289,14 @@ def parse_ua(ua: str) -> str:
             osv = _f(r, "os", "major")
             cli = _f(r, "user_agent", "family")
             clv = _f(r, "user_agent", "major")
-            if dev == "Spider":        # 已被上面判过，这里不重复显示
+            if dev == "Spider":
                 dev = ""
             out = []
             if dev:
                 out.append(dev)
             elif osf in ("Windows", "Mac OS X", "Linux", "Ubuntu", "Debian",
                          "Fedora", "Chrome OS", "ChromeOS"):
-                out.append("电脑")      # 桌面没有「设备型号」，标成电脑更实在
+                out.append("电脑")      # desktop browsers have no device model
             if osf:
                 out.append((osf + " " + osv).strip() if osv else osf)
             if cli:
@@ -310,13 +306,13 @@ def parse_ua(ua: str) -> str:
             # Unknown input stays unknown. The regex fallback defaults to a desktop.
             return "未知"
         except Exception:
-            pass        # 任何意外都退回正则实现，绝不让日志页炸掉
+            pass        # fall back to the regex parser
 
     return _parse_ua_re(ua)
 
 
 def _parse_ua_re(ua: str) -> str:
-    """正则实现：ua-parser 缺失或抛异常时的退路。"""
+    """Regex fallback used when ua-parser is missing or fails."""
     u = ua
     dev, sysv, app = "电脑", "", ""
 
@@ -391,7 +387,7 @@ def housekeeping(conn):
 
     Database rows are kept so the admin list and audit log still resolve.
     """
-    conn.commit()                      # 先落盘，保证备份拿到的是完整状态
+    conn.commit()                      # flush before the online backup
 
     try:
         bk = DATA / "backups"
@@ -438,12 +434,12 @@ def add_watermark(page, text: str):
         return
     rect = page.rect
     w, h = rect.width, rect.height
-    fs = max(7.0, min(11.0, min(w, h) / 62))      # A4 约 9.6pt
+    fs = max(7.0, min(11.0, min(w, h) / 62))      # about 9.6 pt on A4
     step_x, step_y = 250.0, 125.0
     row = 0
     y = fs * 2.5
     while y < h + step_y:
-        x = -70.0 + (step_x / 2 if row % 2 else 0)   # 隔行错开，不留规律空白
+        x = -70.0 + (step_x / 2 if row % 2 else 0)   # stagger alternate rows
         while x < w + 70:
             pt = pymupdf.Point(x, y)
             try:
@@ -451,7 +447,7 @@ def add_watermark(page, text: str):
                                  color=(0.45, 0.45, 0.48), fill_opacity=0.16,
                                  morph=(pt, pymupdf.Matrix(-30)))
             except Exception:
-                try:   # 字体不可用时退回内置字体（中文会缺字，但绝不崩）
+                try:   # built-in font if the CJK font is unavailable
                     page.insert_text(pt, text, fontsize=fs * 0.9,
                                      color=(0.45, 0.45, 0.48), fill_opacity=0.16,
                                      morph=(pt, pymupdf.Matrix(-30)))
@@ -464,7 +460,7 @@ def add_watermark(page, text: str):
 
 def render_pdf(token: str, watermark: str, strips: int = 1,
                quality: int = 88, scale: float = 2.0, fmt: str = "jpeg") -> int:
-    """把 source.pdf 渲染成图片存到 data/docs/<token>/，返回页数。"""
+    """Render source.pdf into data/docs/<token>/ and return the page count."""
     src = DOCS / token / "source.pdf"
     out_dir = DOCS / token
     doc = pymupdf.open(src)
@@ -493,7 +489,7 @@ def render_pdf(token: str, watermark: str, strips: int = 1,
 # ---------------------------------------------------------------- 业务
 
 def refund_idle(conn, token: str):
-    """扣了次数但一页都没看到 → 退还次数（避免网络抖动白扣）。"""
+    """Refund a counted view when the session loaded no page."""
     cutoff = now() - IDLE_REFUND_SEC
     rows = conn.execute(
         "SELECT sid FROM sessions WHERE token=? AND state='active' "
@@ -507,7 +503,7 @@ def refund_idle(conn, token: str):
 
 
 def doc_state(row) -> dict:
-    """给前端用的状态（不含敏感信息）。"""
+    """Public link status. It does not include admin fields."""
     if row is None:
         return {"ok": False, "status": "notfound", "msg": "链接不存在"}
     if row["revoked"]:
@@ -562,10 +558,10 @@ class Handler(BaseHTTPRequestHandler):
             raise ValueError("请求体过大")
         return json.loads(self.rfile.read(n).decode("utf-8"))
 
-    # ---------- 鉴权：全站唯一的管理密钥校验点 ----------
+    # ---------- admin key ----------
     def _is_admin(self):
         key = self.headers.get("X-Admin-Key") or ""
-        # compare_digest = 常数时间比较，防时序侧信道
+        # constant-time comparison
         return key and secrets.compare_digest(key, admin_key())
 
     def _need_admin(self):
@@ -577,7 +573,7 @@ class Handler(BaseHTTPRequestHandler):
                                "msg": "尝试次数过多，请约 %d 分钟后再试"
                                       % (int(wait / 60) + 1)}, 429)
         if self._is_admin():
-            _FAILS.pop(ip, None)          # 成功即清零
+            _FAILS.pop(ip, None)          # a valid key clears the counter
             return False
         n, blocked = fail_hit(ip)
         with db() as conn:
@@ -620,7 +616,7 @@ class Handler(BaseHTTPRequestHandler):
         if site == "cross-site":
             return False
         return True
-    def log_message(self, fmt, *args):  # 静音默认日志
+    def log_message(self, fmt, *args):  # access log is stored in the database
         pass
 
     # ---------- 路由 ----------
@@ -638,12 +634,11 @@ class Handler(BaseHTTPRequestHandler):
             traceback.print_exc()
             self._json({"ok": False, "msg": "服务内部错误"}, 500)
 
-    # 很多监控/健康检查用 HEAD 探活。不实现的话 BaseHTTPRequestHandler 回 501，
-    # 会被误判成「服务挂了」。复用 GET 的路由即可 —— _send() 里已经会跳过 body。
+    # HEAD uses the GET routes. _send() omits the body for it.
     do_HEAD = do_GET
 
     def _route_get(self):
-        # 先挡超长 URL：别让 parse_qs / 正则去啃几百 KB 的脏串
+        # Reject an overlong path before parsing it.
         if len(self.path) > 1024:
             return self._json({"ok": False, "msg": "请求过长"}, 414)
         u = urlparse(self.path)
@@ -655,7 +650,7 @@ class Handler(BaseHTTPRequestHandler):
         if p == "/viewer.html":
             return self._file(ROOT / "viewer.html", "text/html; charset=utf-8")
 
-        # token：字符白名单 + 长度上限（真实 token 只有 12 字符）
+        # Tokens are short URL-safe strings. The pattern also caps length.
         m = re.fullmatch(r"/v/([A-Za-z0-9_\-]{1,64})", p)
         if m:
             return self._viewer(m.group(1))
@@ -735,8 +730,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"ok": False, "msg": "缺少 viewer.html"}, 500)
         html = (ROOT / "viewer.html").read_text(encoding="utf-8")
         html = html.replace("__TOKEN__", token)
-        # 只加 frame-ancestors（不动 default-src，避免误伤页内内联样式/脚本）：
-        # 防止别人把这个阅读页嵌进他自己的网站。
+        # Prevent other sites from framing the viewer. Leave other CSP directives unset.
         self._send(200, html.encode("utf-8"), "text/html; charset=utf-8", {
             "Content-Security-Policy": "frame-ancestors 'none'",
             "X-Robots-Tag": "noindex, nofollow, noarchive",
@@ -750,7 +744,7 @@ class Handler(BaseHTTPRequestHandler):
         consumed when the session is created. Idle refunds also happen there.
         """
         with db() as conn:
-            # 直连图片 / 第三方引用 → 拦掉，并记一条日志供事后查是谁在扒
+            # Direct and cross-site image loads are rejected and logged.
             if not self._fetch_ok():
                 log(conn, token, sid, "blocked",
                     "图片直连被拦 dest=%s site=%s mode=%s referer=%s" % (
@@ -956,7 +950,7 @@ class Handler(BaseHTTPRequestHandler):
             log(conn, token, "", "publish",
                 f"发布 {name}（{pages} 页，限 {limit} 次，单次 {duration} 秒）",
                 self._ip(), self._ua())
-            housekeeping(conn)      # 顺手做：db 备份 + 清过期文件
+            housekeeping(conn)
 
         self._json({"ok": True, "token": token, "pages": pages,
                     "url": f"/v/{token}"})
@@ -975,7 +969,7 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     init_db()
-    with db() as c:                 # 启动时也做一次：长期不发布也能备份
+    with db() as c:                 # also runs at startup, not only on publish
         try:
             housekeeping(c)
         except Exception:

@@ -1,12 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-命令行发布（方便脚本化 / 跟 ERP 打通）。
+"""Publish one PDF from the command line.
 
-示例：
-  D:\\Python312\\python.exe publish.py samples\\sample-quote.pdf ^
-      --limit 1 --duration 10 --days 3 --strips 4 ^
-      --watermark "仅限 XX 电子 2026-09-30"
+    python publish.py samples/sample-quote.pdf --limit 1 --duration 10 --days 3
 """
 
 from __future__ import annotations
