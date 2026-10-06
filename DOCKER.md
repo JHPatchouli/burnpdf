@@ -29,8 +29,7 @@
 docker build -t burnpdf:1.0 .
 ```
 
-> 本机没装 Docker，所以**这一步我没法替你验证**（镜像未经我本地构建）。
-> 写法很保守：只用官方 `python:3.12-slim` + `apt` 装 openssh-server + `pip install pymupdf`。
+> 镜像基于官方 `python:3.12-slim`，再用 `apt` 安装 openssh-server，`pip` 安装 pymupdf。
 > 如果 `pip` 装 pymupdf 失败（网络慢），加国内源：
 > ```dockerfile
 > RUN pip install --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple pymupdf==1.28.2

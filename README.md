@@ -44,8 +44,8 @@
 
 ```powershell
 cd pdf-burn
-D:\Python312\python.exe make_sample.py        # 生成示例 PDF（第一次才需要）
-D:\Python312\python.exe server.py             # 启动服务（常驻）
+python make_sample.py        # 生成示例 PDF（第一次才需要）
+python server.py             # 启动服务（常驻）
 ```
 
 启动后控制台会打印**管理台地址**和**管理密钥**：
@@ -60,9 +60,9 @@ D:\Python312\python.exe server.py             # 启动服务（常驻）
 命令行方式：
 
 ```powershell
-D:\Python312\python.exe publish.py samples\sample-quote.pdf `
+python publish.py samples\sample-quote.pdf `
     --limit 1 --duration 10 --days 3 --strips 4 `
-    --watermark "仅限 XX 电子 2026-09-30"
+    --watermark "仅限示例客户 2026-09-30"
 ```
 
 参数含义：
@@ -80,12 +80,11 @@ D:\Python312\python.exe publish.py samples\sample-quote.pdf `
 ## 关键设计（这几条不做对就会出 bug）
 
 1. **扣次时机 = 客户点「开始阅读」那一刻**，不是打开链接那一刻。
-   打开链接只是看一眼说明页，不扣次 —— 否则转发出去的链接谁点一下就把你的次数吃掉了。
-2. **扣完次之后，本次会话仍要能取图**。次数是"入场券"，`session` 才是"通行证"。
-   （这条踩过坑：早期版本在取图接口里又拿"剩余次数"当门槛，结果限 1 次的文档一扣完次就自己取不到图。）
-3. **刷新页面不重复扣次**。客户在微信里切后台回来会重载页面，
-   所以前端把 `sid` 存在 `sessionStorage` 里，回来时复用同一个会话。
-   （这条也踩过坑：判定顺序写反了，客户一刷新就被判"已查看完"。）
+   打开链接只是看一眼说明页，不扣次。
+2. **扣完次之后，本次会话仍要能取图**。次数是入场条件，`session` 才是本次阅读的凭证。
+   取图接口不再用剩余次数做门槛。
+3. **刷新页面不重复扣次**。前端把 `sid` 存在 `sessionStorage` 里，回来时复用同一个会话。
+   服务端先判断能否复用会话，再判断是否还有剩余次数。
 4. **60 秒宽限退次数**：扣了次数但一页都没加载出来（网络抖动、误触），
    下次打开时自动把那一次退回来 —— 避免"客户什么都没看到，次数没了"。
 5. **原 PDF 永不下发**。服务端转成图片再说；水印也是用 PyMuPDF 直接画进页里，
@@ -106,7 +105,7 @@ flowchart LR
 | 项 | 说明 |
 |---|---|
 | 服务器 | 任意一台能上网的机器；轻量云服务器 1 核 2G 足够 |
-| **域名** | ⚠️ **微信里打开必须是已备案域名**。**省事技巧：公司已有备案官网的，直接把 `/v/` 反代到本服务**，不用重新备案，当天能用 |
+| **域名** | 在微信里打开需要已备案域名和 HTTPS。可以用已有站点的一个路径反向代理到本服务。 |
 | HTTPS | Caddy 两行搞定（证书自动签发）：<br/>`view.your-domain.com { reverse_proxy 127.0.0.1:8770 }` |
 | 开机自启 | Linux：写个 systemd unit；Windows：用 NSSM 注册成服务，或计划任务 |
 | 端口 | 只放行 80/443，`8770` 不要直接暴露到公网 |
@@ -120,7 +119,7 @@ flowchart LR
 ## 改完代码先跑自测
 
 ```powershell
-D:\Python312\python.exe selftest.py
+python selftest.py
 ```
 
 会自己发布测试文档，检查：计次、**扣完次仍能取图**、伪造 session 被拒、

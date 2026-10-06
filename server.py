@@ -11,7 +11,7 @@
   · 60 秒宽限：扣了次数但一页都没加载出来（网络抖动、误触）→ 自动退还次数
 
 依赖：PyMuPDF（pymupdf），其余全是标准库。
-运行：D:\\Python312\\python.exe server.py
+运行：python server.py
 """
 
 from __future__ import annotations
@@ -39,9 +39,8 @@ try:
 except ImportError:  # 旧包名
     import fitz as pymupdf  # type: ignore
 
-# ua-parser 是【可选】依赖，装在 ./vendor（挂载目录里 → 容器重建不丢，不用改镜像）。
-# 它比自己写的正则准得多（实测能认出 Samsung SM-S918B 这种具体机型、
-# 以及「微信内置浏览器」）。缺了也不影响服务：parse_ua() 会自动退回正则实现。
+# ua-parser is optional. Install it under ./vendor if you want device-level
+# user-agent parsing. parse_ua() falls back to a small regex parser without it.
 _VENDOR = Path(__file__).resolve().parent / "vendor"
 if _VENDOR.is_dir():
     sys.path.insert(0, str(_VENDOR))
@@ -74,9 +73,8 @@ BACKUP_KEEP_DAYS = 7       # burn.db 备份保留份数（每天一份）
 CLEAN_AFTER_DAYS = 30      # 过期超过这么多天 → 删文档文件（保留 db 记录）
 MAX_UPLOAD = 80 * 1024 * 1024
 
-# IP → 归属地。**只在管理台主动点击时才查**，且结果永久缓存。
-# 刻意不做「自动批量查询」，就是为了让「把客户 IP 发给第三方」永远由人触发。
-# ip-api.com 免费、无需注册、支持中文。
+# IP geolocation runs only when an admin asks for one address, then caches it.
+# ip-api.com is free, needs no account, and returns Chinese place names.
 GEO_URL = ("http://ip-api.com/json/%s"
            "?lang=zh-CN&fields=status,country,regionName,city,isp,query")
 GEO_TIMEOUT = 6.0
@@ -145,9 +143,7 @@ def admin_key() -> str:
     return ADMIN_KEY_FILE.read_text(encoding="utf-8").strip()
 
 
-# ---------------------------------------------------------------- 防爆破
-# 管理密钥是「全部权限」，裸暴露在公网上必须限速：不限速的话，脚本能无限次试。
-# 计数放在进程内存里（重启即清空）—— 不引入 redis 之类的额外依赖。
+# Admin-key failures are rate limited in process memory. A restart clears the count.
 _FAILS: dict = {}
 FAIL_WINDOW = 300.0     # 失败计数窗口：5 分钟
 FAIL_MAX = 8            # 窗口内允许失败次数
@@ -155,7 +151,7 @@ BLOCK_SEC = 900.0       # 超限后封禁 15 分钟
 
 
 def _fails_gc():
-    """_FAILS 是攻击者可以撑大的字典，偶尔清一次，别把内存灌满。"""
+    """Drop expired entries so the failure map cannot grow without bound."""
     if len(_FAILS) < 1000:
         return
     t = now()
@@ -195,8 +191,7 @@ def fail_hit(ip):
 
 
 def safe_int(v, default=0) -> int:
-    """把 URL 上来的东西转 int，**绝不因为脏输入抛异常**（否则变成 500）。
-    截断到 12 位也顺手挡住了 `?k=99999999...` 这种拿超长数字耗 CPU 的玩法。"""
+    """Parse an integer from request input. Never raises; caps the digit length."""
     try:
         return int(str(v)[:12])
     except Exception:
@@ -204,7 +199,7 @@ def safe_int(v, default=0) -> int:
 
 
 def safe_float(v, default=0.0) -> float:
-    """同上。额外排掉 NaN / inf —— `scale: NaN` 会让 Matrix 构造出奇怪东西。"""
+    """Parse a finite float from request input. Never raises."""
     try:
         f = float(str(v)[:24])
         return default if (f != f or f in (float("inf"), float("-inf"))) else f
@@ -213,8 +208,7 @@ def safe_float(v, default=0.0) -> float:
 
 
 def _peer_is_local(peer: str) -> bool:
-    """对端地址是不是本机/内网（nginx、docker-proxy）。
-    对端地址来自 TCP 连接，客户端改不了；X-Forwarded-For 是可以随便伪造的。"""
+    """True when the TCP peer is loopback or private, such as a local reverse proxy."""
     try:
         a = ipaddress.ip_address(peer)
         return a.is_loopback or a.is_private
@@ -227,13 +221,12 @@ def init_db():
     DOCS.mkdir(parents=True, exist_ok=True)
     with db() as conn:
         conn.executescript(SCHEMA)
-        # 轻量迁移：CREATE TABLE IF NOT EXISTS 不会给【已存在】的表加列，
-        # 所以新增字段必须在这里单独补一次。ALTER 是幂等的（先查 PRAGMA）。
+        # CREATE TABLE IF NOT EXISTS does not add columns to an existing table.
         cols = {r["name"] for r in conn.execute("PRAGMA table_info(sessions)")}
         if "scrape_flagged" not in cols:
             conn.execute("ALTER TABLE sessions "
                          "ADD COLUMN scrape_flagged INTEGER DEFAULT 0")
-        # recipient = 「这份链接发给了谁」，取证时靠它把 token 对应到人
+        # recipient records who a link was sent to. It is not drawn into the image.
         dcols = {r["name"] for r in conn.execute("PRAGMA table_info(docs)")}
         if "recipient" not in dcols:
             conn.execute("ALTER TABLE docs ADD COLUMN recipient TEXT")
@@ -251,12 +244,7 @@ _CRAWLER = ("bot", "spider", "crawler", "scrapy", "phantomjs")
 
 
 def _f(obj, *path) -> str:
-    """安全取 ua-parser 结果里的字段（逐层 None 保护，返回 str）。
-
-    实测 ua-parser 1.0.2：user_agent / os / device **三个字段会各自独立为 None**
-    —— 桌面浏览器的 device 是 None，curl 的 os 和 device 都是 None。
-    不逐层保护，日志页就会随机 AttributeError。
-    """
+    """Read a nested ua-parser field. Any level may be None."""
     cur = obj
     for k in path:
         if cur is None:
@@ -266,11 +254,10 @@ def _f(obj, *path) -> str:
 
 
 def _ua_script(ua: str) -> str:
-    """非浏览器客户端 → 返回标记文案；正常浏览器 → 返回空串。
+    """Return a label for non-browser clients, or an empty string for browsers.
 
-    为什么不直接信 ua-parser 的 device.family：实测 curl 的 device 是 None，
-    只有 Python-urllib 才被标成 'Spider' —— 单靠它判会漏掉 curl 这类。
-    所以先看有没有 'Mozilla' 这个浏览器标志。
+    device.family alone misses clients such as curl, so the Mozilla token is
+    checked first.
     """
     low = ua.lower()
     if "mozilla" in low:
@@ -288,16 +275,12 @@ def _ua_script(ua: str) -> str:
 
 
 def parse_ua(ua: str) -> str:
-    """User-Agent 说人话：设备 · 系统 · 客户端。专供取证。
-
-    优先用 ua-parser（准确，细到具体机型），拿不到就退回下面的正则实现，
-    所以本文件不依赖它也能跑。
-    """
+    """Turn a User-Agent into "device, OS, client" for the admin log."""
     if not ua:
         return "未知"
     ua = str(ua)[:512]
 
-    # 脚本/爬虫优先判 —— 这才是取证时最想一眼看到的
+    # Non-browser clients are labelled before device parsing.
     mark = _ua_script(ua)
     if mark:
         return mark
@@ -324,9 +307,7 @@ def parse_ua(ua: str) -> str:
                 out.append((cli + " " + clv).strip() if clv else cli)
             if out:
                 return " · ".join(out)
-            # ua-parser 什么都认不出 = 垃圾/极冷门 UA。
-            # 不能再退回正则实现 —— 那里的 dev 默认值就是「电脑」，
-            # 于是 \x01\x02\x03 这种会被误报成一台电脑。
+            # Unknown input stays unknown. The regex fallback defaults to a desktop.
             return "未知"
         except Exception:
             pass        # 任何意外都退回正则实现，绝不让日志页炸掉
@@ -383,11 +364,7 @@ def _parse_ua_re(ua: str) -> str:
 
 
 def geo_lookup(ip: str) -> str:
-    """查 IP 归属地（仅 IPv4，免费接口不支持 v6）。失败返回空串。
-
-    隐私：这一步会把该 IP 发给 ip-api.com。之所以做成「由人点击触发 + 永久缓存」
-    而不自动批量查，就是为了不把客户 IP 静默送出去。
-    """
+    """Look up an IPv4 address. Sends that address to ip-api.com."""
     try:
         if ipaddress.ip_address(ip).version != 4:
             return ""
@@ -410,14 +387,9 @@ def geo_lookup(ip: str) -> str:
 
 
 def housekeeping(conn):
-    """生产环境必做的两件事，都幂等（启动时 + 每次发布时各跑一次）：
+    """Back up the database once a day and delete files for long-expired documents.
 
-    1) burn.db 每日备份，保留最近 BACKUP_KEEP_DAYS 份
-       db 是唯一真相源（所有链接/次数/日志都在里面），没备份的话误删就全没了。
-       用 sqlite 官方的在线备份 API，不需要停服务。
-    2) 清理「已过期超过 CLEAN_AFTER_DAYS 天」的文档文件
-       只删渲染图和原始 PDF，**保留 db 记录** —— 列表和审计还在，
-       只是打不开。既省磁盘，又不丢账。
+    Database rows are kept so the admin list and audit log still resolve.
     """
     conn.commit()                      # 先落盘，保证备份拿到的是完整状态
 
@@ -447,12 +419,7 @@ def housekeeping(conn):
 # ---------------------------------------------------------------- 渲染
 
 def build_mark_text(user_text: str, token: str) -> str:
-    """生成可溯源的指纹文本：用户标识 · token · 时间。
-
-    为什么必须有 token：拿到泄露出来的图 → 读出 token → 查得出是哪一份链接
-    → 查得出发给了谁（logs 表里每次 open 都记了 ip/ua/时间）。
-    为什么必须有时间：方便和日志按时间对上，区分「同一份链接的不同阅读」。
-    """
+    """Watermark text: optional label, link token, and local time."""
     bits = []
     u = (user_text or "").strip()
     if u:
@@ -463,13 +430,9 @@ def build_mark_text(user_text: str, token: str) -> str:
 
 
 def add_watermark(page, text: str):
-    """把指纹水印**铺满**整页（画进 PDF，随后一起转成图片，前端删不掉）。
+    """Draw a diagonal watermark across the whole page before rasterizing it.
 
-    为什么要铺满：客户很可能只截局部，只有铺满才能保证任何一块都带水印。
-    （早先是 3 行×2 列共 6 处，截中间就完全没有水印，溯源等于失效。）
-
-    为什么要 morph：insert_text 的 rotate 只接受 90 的倍数，
-    任意角度的斜向水印必须用 morph=(锚点, Matrix(角度))。
+    insert_text only rotates by multiples of 90 degrees, so the angle uses morph.
     """
     if not text:
         return
@@ -509,8 +472,7 @@ def render_pdf(token: str, watermark: str, strips: int = 1,
     mat = pymupdf.Matrix(scale, scale)
     for i in range(n_pages):
         page = doc[i]
-        # 指纹水印**始终**画：它是「泄露后能追到哪一份链接」的唯一手段，
-        # 不能因为发布者没填水印文字就跳过（那样就没法溯源了）。
+        # The token is always included, even when the publisher leaves the label blank.
         add_watermark(page, build_mark_text(watermark, token))
         if strips <= 1:
             pix = page.get_pixmap(matrix=mat)
@@ -607,11 +569,7 @@ class Handler(BaseHTTPRequestHandler):
         return key and secrets.compare_digest(key, admin_key())
 
     def _need_admin(self):
-        """**唯一**校验点。所有管理动作都必须过这里。
-
-        别在别处再比一次密钥 —— 同一个能力有几个入口，安全参数就要在几个入口上接。
-        失败会累计，到上限临时封禁来源 IP（防脚本灌）。
-        """
+        """The only admin-key check. Failed attempts are counted and then blocked."""
         ip = self._ip()
         wait, _left = fail_check(ip)
         if wait > 0:
@@ -635,19 +593,11 @@ class Handler(BaseHTTPRequestHandler):
         return True
 
     def _ip(self):
-        """客户端 IP（日志展示 + 限速依据）。
+        """Client address used for logs and rate limits.
 
-        ⚠️ X-Forwarded-For **可以伪造**。实测（2026-09-30）确认本机 nginx 用的是
-        `$proxy_add_x_forwarded_for`，它是**追加式**的：
-            客户端发的：  X-Forwarded-For: 1.2.3.4           <- 攻击者随便编
-            nginx 转发：  X-Forwarded-For: 1.2.3.4, <真实IP>
-        所以**真实 IP 是最后一段**。取第一段 = 把限速和审计交给攻击者决定
-        （每个请求换一个伪造值，就等于每次都是「新客户端」，限速形同虚设）。
-
-        只有在「TCP 对端确实是本机/内网反代」时才采信 XFF —— 对端地址来自
-        TCP 连接本身，客户端改不了。
-
-        如果将来前面再套一层 CDN，真实 IP 会再往左挪一位，这里要跟着改。
+        X-Forwarded-For is trusted only when the TCP peer is a local proxy,
+        and only its last address is used. A proxy that appends another hop,
+        such as a CDN, needs this adjusted.
         """
         peer = (self.client_address[0] if self.client_address else "") or ""
         if _peer_is_local(peer):
@@ -659,19 +609,9 @@ class Handler(BaseHTTPRequestHandler):
     def _ua(self):
         return self.headers.get("User-Agent") or ""
     def _fetch_ok(self) -> bool:
-        """挡住「地址栏直接打开图片」和「别的网站引用图片」。
+        """Reject direct navigation and cross-site embeds when Sec-Fetch is present.
 
-        依据 Sec-Fetch-* —— 这是浏览器自己加的，而且属于 forbidden header name，
-        页面里的 JS 改不了、也伪造不了：
-            Sec-Fetch-Dest: image       <- <img src=...> 正常加载          → 放行
-            Sec-Fetch-Dest: document    <- 地址栏 / 新标签页直接打开图片 → 拒绝
-            Sec-Fetch-Site: cross-site  <- 第三方站点引用                  → 拒绝
-
-        老浏览器、无头工具（curl / requests / 下载器）不发这些头 → 一律放行。
-        这是**故意 fail-open**：宁可放过脚本，也绝不能误伤真实客户
-        （微信老内核、Safari < 16.4 都不发这个头）。
-        所以它能拦掉「复制链接到地址栏」这类普通操作，但拦不住会看
-        网络面板的人 —— 那种人本来也能直接截屏。
+        Requests without those headers are allowed, because older browsers omit them.
         """
         dest = (self.headers.get("Sec-Fetch-Dest") or "").strip().lower()
         site = (self.headers.get("Sec-Fetch-Site") or "").strip().lower()
@@ -804,15 +744,10 @@ class Handler(BaseHTTPRequestHandler):
         })
 
     def _page(self, token: str, idx: int, sid: str, k: int = 0):
-        """取某一页的图片（被切成多条时用 k 定位第几条）。
+        """Return one rendered page strip.
 
-        ⚠️ 这里**只能**校验会话，不能拿「剩余次数」当门槛：
-        次数在 /api/prepare 时就已经扣掉了，session 才是本次阅读的授权凭证。
-        （早期版本在这里复用了 doc_state()，结果「限 1 次」的文档一扣完次就自己
-         再也取不到图 —— 这种 bug 接口自测看不出来，必须真在浏览器里跑一遍。）
-
-        也不在这里做「超时退次数」：那个只在 prepare 时做，否则客户点开页面后
-        停一会儿没滑动，会话会被误判成「没看到内容」而被作废。
+        Authorization is the session, not the remaining view count. The count is
+        consumed when the session is created. Idle refunds also happen there.
         """
         with db() as conn:
             # 直连图片 / 第三方引用 → 拦掉，并记一条日志供事后查是谁在扒
@@ -844,11 +779,7 @@ class Handler(BaseHTTPRequestHandler):
             if idx < 0 or idx >= row["pages"]:
                 return self._json({"ok": False, "msg": "页码越界"}, 404)
 
-            # ★ 异常取图检测（只记审计，不阻断）。
-            #   正常人看图靠滚动懒加载，块与块之间必然有时间间隔；
-            #   脚本会在极短时间内把整份文档的图块全抓走。
-            #   只记录不判罚 —— 零误伤风险，但事后能查出「谁在什么时候
-            #   秒抓了哪份文档」，配合水印就能追到人。
+            # A full document fetched within SCRAPE_SEC is logged, not blocked.
             taken = (s["pages_served"] or 0) + 1
             total = (row["pages"] or 0) * max(1, row["strips"] or 1)
             elapsed = now() - (s["start_ts"] or now())
@@ -927,9 +858,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"ok": False, "status": "expired",
                                    "msg": "该链接已过期"}, 403)
 
-            # ★ 顺序很重要：**先看能不能复用已有会话，再判「还有没有次数」**。
-            #   否则「限 1 次」的文档在客户持有有效会话时（切后台回来 / 刷新页面）
-            #   会直接被判成「已查看完」，明明他还在本次阅读时限内。
+            # Reuse a live session before checking the remaining view count.
             if sid_in:
                 s = conn.execute("SELECT * FROM sessions WHERE sid=?", (sid_in,)).fetchone()
                 if (s and s["token"] == token and s["state"] == "active"
@@ -1003,11 +932,11 @@ class Handler(BaseHTTPRequestHandler):
                                 safe_float(body.get("expire_days"), DEFAULT_EXPIRE_DAYS)))
             expire_ts = now() + days * 86400 if days > 0 else 0
         watermark = str(body.get("watermark") or "").strip()[:80]
-        # 收件人：只存台账，不进水印（泄露者看不到自己被记名）
+        # Stored for the admin only. It is not included in the watermark.
         recipient = str(body.get("recipient") or "").strip()[:60]
         strips = max(1, min(12, safe_int(body.get("strips"), DEFAULT_STRIPS)))
         quality = max(40, min(95, safe_int(body.get("quality"), DEFAULT_QUALITY)))
-        # scale 决定渲染倍率——不夹紧的话 scale=1e9 能把内存直接打爆
+        # Keep the render scale inside a small range.
         scale = max(0.5, min(4.0, safe_float(body.get("scale"), DEFAULT_SCALE)))
         name = str(body.get("name") or "未命名文档").strip()[:120] or "未命名文档"
 
@@ -1051,10 +980,8 @@ def main():
             housekeeping(c)
         except Exception:
             traceback.print_exc()
-    # 只在「本次才生成」的时候打印一次密钥。
-    # 每次启动都打印的话，`docker logs` 里会永久留存明文管理密钥 ——
-    # 任何能执行 `docker logs` 的人（或拿到 docker 权限的进程）就等于拿到全部权限。
-    fresh = not ADMIN_KEY_FILE.exists()      # 必须在 admin_key() 之前判断
+    # Print the admin key only when it is created. Later restarts stay quiet.
+    fresh = not ADMIN_KEY_FILE.exists()
     key = admin_key()
     srv = ThreadingHTTPServer((HOST, PORT), Handler)
     srv.daemon_threads = True

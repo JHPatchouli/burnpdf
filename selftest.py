@@ -1,16 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-接口自测 / 回归测试。
+"""Regression checks for a running server.
 
-    D:\\Python312\\python.exe selftest.py
+    python selftest.py
 
-不需要服务是「干净的」——它会自己发布测试文档。
-但要求服务已经跑起来（server.py）。
-
-★ 重点守住的一条断言：**扣完次数之后，本次会话仍然必须能取到图**。
-  早期版本在取图接口里复用了「剩余次数」做门槛，结果「限 1 次」的文档
-  一扣完次就再也取不到图。接口测试很容易漏掉这种错，所以单独钉住。
+The checks publish their own documents. One check confirms that a session can
+still fetch images after its view has been counted.
 """
 
 from __future__ import annotations

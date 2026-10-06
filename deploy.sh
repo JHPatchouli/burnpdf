@@ -85,9 +85,8 @@ for f in server.py viewer.html admin.html publish.py make_sample.py selftest.py 
 done
 
 # 挂载会【盖住】镜像里的文件，于是构建期做过的修正全部失效，必须在这里补做：
-#   · Dockerfile 的 `sed -i 's/\r$//' entrypoint.sh` → 宿主机上的可能还是 CRLF
-#   · Dockerfile 的 `chmod +x entrypoint.sh`        → 宿主机上多半是 644
-# 漏了就会 `exec: "/app/entrypoint.sh": permission denied`，容器秒退。
+# The image build fixes entrypoint.sh, but a bind mount hides those fixes.
+# Normalize line endings and the executable bit on the host copy before starting.
 sed -i 's/\r$//' "$SRC/entrypoint.sh" 2>/dev/null || true
 chmod +x "$SRC/entrypoint.sh" || die "无法给 entrypoint.sh 加执行权限"
 
